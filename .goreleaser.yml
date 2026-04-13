@@ -1,0 +1,34 @@
+version: 2
+
+builds:
+  - main: ./cmd
+    binary: qube
+    ldflags:
+      - -s -w
+      - -X github.com/apiqube/qube/internal/commands.version={{.Version}}
+      - -X github.com/apiqube/qube/internal/commands.commit={{.ShortCommit}}
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+
+archives:
+  - format: tar.gz
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    format_overrides:
+      - goos: windows
+        format: zip
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^docs:'
+      - '^ci:'
+      - '^chore:'
