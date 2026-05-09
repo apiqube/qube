@@ -14,10 +14,10 @@ var versionCmd = &cobra.Command{
 	Short: "Print qube version",
 	RunE: func(cmd *cobra.Command, _ []string) error {
 		out := cmd.OutOrStdout()
-		title := ui.Brand.Render("qube ") + ui.Accent.Render(version.Version)
-		details := ui.Muted.Render(fmt.Sprintf("commit %s · built %s",
+		title := ui.BrandStyle.Render("qube ") + ui.AccentStyle.Render(version.Version)
+		meta := ui.MutedStyle.Render(fmt.Sprintf(" · commit %s · built %s",
 			version.Commit, version.Date))
-		fmt.Fprintln(out, ui.SummaryCard.Render(title+"\n"+details))
+		fmt.Fprintln(out, title+meta)
 		return nil
 	},
 }

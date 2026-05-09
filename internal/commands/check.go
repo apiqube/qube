@@ -3,10 +3,8 @@ package commands
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"sort"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -59,24 +57,21 @@ func checkE(cmd *cobra.Command, args []string) error {
 
 	errs, err := eng.Check(ctx, engine.FromPaths(paths...), opts...)
 	if err != nil {
-		fmt.Fprintln(cmd.ErrOrStderr(), ui.Failure.Render("check failed: ")+err.Error())
+		ui.Errf("check failed: %v", err)
 		os.Exit(2) //nolint:gocritic
 	}
 
-	stdout := cmd.OutOrStdout()
 	if len(errs) == 0 {
-		fmt.Fprintln(stdout, ui.SummaryCard.
-			BorderForeground(ui.ColorSuccess).
-			Render(ui.Success.Render("All manifests valid.")))
+		ui.Success("All manifests valid")
 		return nil
 	}
 
-	renderErrors(stdout, errs)
+	renderErrors(errs)
 	os.Exit(1) //nolint:gocritic
 	return nil
 }
 
-func renderErrors(stdout io.Writer, errs []engine.ValidationError) {
+func renderErrors(errs []engine.ValidationError) {
 	byFile := groupErrorsByFile(errs)
 	files := make([]string, 0, len(byFile))
 	for f := range byFile {
@@ -85,29 +80,42 @@ func renderErrors(stdout io.Writer, errs []engine.ValidationError) {
 	sort.Strings(files)
 
 	for _, file := range files {
-		header := ui.Brand.Render(file)
-		var lines []string
+		ui.Err(file)
 		for _, e := range byFile[file] {
-			icon := ui.Failure.Render("✗")
+			icon := "✗"
+			level := ui.LevelError
 			if e.Severity == engine.SeverityWarning {
-				icon = ui.Warn.Render("⚠")
+				icon = "⚠"
+				level = ui.LevelWarn
 			}
-			loc := ""
-			if e.Line > 0 {
-				loc = ui.Muted.Render(fmt.Sprintf("line %d  ", e.Line))
-			}
-			field := ""
-			if e.Field != "" {
-				field = ui.Accent.Render(e.Field) + "  "
-			}
-			lines = append(lines, fmt.Sprintf("  %s  %s%s%s", icon, loc, field, e.Message))
+			detail := formatErrorDetail(icon, e)
+			ui.DefaultLogger.Log(level, detail)
 		}
-		body := header + "\n" + strings.Join(lines, "\n")
-		fmt.Fprintln(stdout, ui.ErrorBlock.Render(body))
 	}
+	ui.Errf("%d validation error(s) found", len(errs))
+}
 
-	total := ui.Failure.Render(fmt.Sprintf("%d validation error(s) found.", len(errs)))
-	fmt.Fprintln(stdout, total)
+func formatErrorDetail(icon string, e engine.ValidationError) string {
+	parts := []string{icon}
+	if e.Line > 0 {
+		parts = append(parts, ui.MutedStyle.Render(fmt.Sprintf("line %d", e.Line)))
+	}
+	if e.Field != "" {
+		parts = append(parts, ui.AccentStyle.Render(e.Field))
+	}
+	parts = append(parts, e.Message)
+	return joinParts(parts, "  ")
+}
+
+func joinParts(parts []string, sep string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += sep
+		}
+		out += p
+	}
+	return out
 }
 
 func groupErrorsByFile(errs []engine.ValidationError) map[string][]engine.ValidationError {

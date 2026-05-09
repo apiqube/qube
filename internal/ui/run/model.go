@@ -15,32 +15,26 @@ import (
 	"github.com/apiqube/qube/internal/ui"
 )
 
-// Model is the Bubble Tea model for `qube run`.
+// Model is the Bubble Tea model for `qube run`. The layout is intentionally
+// flat — a brand line, a list of test rows, a progress line — no rounded
+// borders or boxed cards.
 type Model struct {
-	// Run-wide info populated from RunStarted.
 	files      []string
 	totalTests int
 	totalWaves int
 	startTime  time.Time
 
-	// Wave tracking.
-	currentWave   int
+	currentWave    int
 	completedWaves int
 
-	// Per-test state, in the order tests started.
 	testOrder []string
 	testState map[string]testEntry
 
-	// Terminal width tracked from WindowSize messages; defaults sane.
 	width int
 
-	// Spinner for "running" rows.
-	spinner spinner.Model
-
-	// Progress bar at the bottom.
+	spinner  spinner.Model
 	progress progress.Model
 
-	// Run completion state.
 	finished bool
 	summary  *engine.RunCompleted
 	results  *engine.Results
@@ -62,7 +56,7 @@ type testEntry struct {
 func New() *Model {
 	sp := spinner.New()
 	sp.Spinner = spinner.Dot
-	sp.Style = ui.Accent
+	sp.Style = ui.AccentStyle
 
 	pb := progress.New(progress.WithGradient("#5BC8E8", "#C084FC"))
 	pb.Width = 36
@@ -168,7 +162,6 @@ func (m *Model) View() string {
 
 func (m *Model) viewLive() string {
 	var b strings.Builder
-
 	b.WriteString(m.renderHeader())
 	b.WriteByte('\n')
 	b.WriteString(m.renderTestList())
@@ -186,25 +179,31 @@ func (m *Model) viewSummary() string {
 		b.WriteString(m.renderTestList())
 		b.WriteByte('\n')
 	}
-	b.WriteString(m.renderSummaryCard())
+	b.WriteString(m.renderSummary())
 	b.WriteByte('\n')
+	if details := m.renderFailureDetails(); details != "" {
+		b.WriteByte('\n')
+		b.WriteString(details)
+		b.WriteByte('\n')
+	}
 	if m.runErr != nil {
-		b.WriteString(ui.Failure.Render("engine error: " + m.runErr.Error()))
+		b.WriteString(ui.FailureStyle.Render("engine error: " + m.runErr.Error()))
 		b.WriteByte('\n')
 	}
 	return b.String()
 }
 
+// renderHeader is one bold brand line — no border, no padding.
 func (m *Model) renderHeader() string {
-	title := ui.Brand.Render("qube run")
-	subtitle := ui.Muted.Render(fmt.Sprintf("%d tests · %d files · %d waves",
+	title := ui.BrandStyle.Render("qube run")
+	subtitle := ui.MutedStyle.Render(fmt.Sprintf(" · %d tests · %d files · %d waves",
 		m.totalTests, len(m.files), m.totalWaves))
-	return ui.Header.Render(title + "  " + subtitle)
+	return title + subtitle
 }
 
 func (m *Model) renderTestList() string {
 	if len(m.testOrder) == 0 {
-		return ui.Muted.Render("waiting for first test...")
+		return ui.MutedStyle.Render("waiting for first test...")
 	}
 	var lines []string
 	for _, name := range m.testOrder {
@@ -223,11 +222,11 @@ func (m *Model) renderRow(t testEntry) string {
 
 	dur := ""
 	if t.status != ui.StatusRunning && t.status != ui.StatusPending {
-		dur = ui.Muted.Render(formatDuration(t.duration))
+		dur = ui.MutedStyle.Render(formatDuration(t.duration))
 	}
 	name := t.name
 	if t.status == ui.StatusFailed || t.status == ui.StatusErrored {
-		name = ui.Failure.Render(name)
+		name = ui.FailureStyle.Render(name)
 	}
 	parts := []string{icon, name}
 	if dur != "" {
@@ -251,34 +250,29 @@ func (m *Model) renderProgress() string {
 		pct = 1
 	}
 	bar := m.progress.ViewAs(pct)
-	wave := ui.Muted.Render(fmt.Sprintf("wave %d/%d · %d/%d tests",
+	wave := ui.MutedStyle.Render(fmt.Sprintf("wave %d/%d · %d/%d tests",
 		m.currentWave, m.totalWaves, completed, m.totalTests))
 	return lipgloss.JoinHorizontal(lipgloss.Top, bar, "  ", wave)
 }
 
-func (m *Model) renderSummaryCard() string {
+// renderSummary returns one line: "3 passed, 1 failed · 1.85s". No border.
+func (m *Model) renderSummary() string {
 	if m.summary == nil {
 		return ""
 	}
 	s := m.summary
-	parts := []string{ui.Success.Render(fmt.Sprintf("%d passed", s.Passed))}
+	parts := []string{ui.SuccessStyle.Render(fmt.Sprintf("%d passed", s.Passed))}
 	if s.Failed > 0 {
-		parts = append(parts, ui.Failure.Render(fmt.Sprintf("%d failed", s.Failed)))
+		parts = append(parts, ui.FailureStyle.Render(fmt.Sprintf("%d failed", s.Failed)))
 	}
 	if s.Errored > 0 {
-		parts = append(parts, ui.Failure.Render(fmt.Sprintf("%d errored", s.Errored)))
+		parts = append(parts, ui.FailureStyle.Render(fmt.Sprintf("%d errored", s.Errored)))
 	}
 	if s.Skipped > 0 {
-		parts = append(parts, ui.Muted.Render(fmt.Sprintf("%d skipped", s.Skipped)))
+		parts = append(parts, ui.MutedStyle.Render(fmt.Sprintf("%d skipped", s.Skipped)))
 	}
-	totals := strings.Join(parts, "   ")
-	dur := ui.Muted.Render(formatDuration(s.Duration) + " total")
-
-	body := totals + "\n" + dur
-	if details := m.renderFailureDetails(); details != "" {
-		body += "\n\n" + details
-	}
-	return ui.SummaryCard.Render(body)
+	dur := ui.MutedStyle.Render(formatDuration(s.Duration))
+	return strings.Join(parts, ", ") + " · " + dur
 }
 
 func (m *Model) renderFailureDetails() string {
@@ -288,15 +282,14 @@ func (m *Model) renderFailureDetails() string {
 		if t.status != ui.StatusFailed && t.status != ui.StatusErrored {
 			continue
 		}
-		lines = append(lines, ui.Failure.Render("✗ "+t.name))
+		lines = append(lines, ui.FailureStyle.Render("✗ "+t.name))
 		if t.err != "" {
-			lines = append(lines, "    "+ui.Muted.Render("error: "+t.err))
+			lines = append(lines, "  "+ui.MutedStyle.Render(t.err))
 		}
 		for _, a := range t.failures {
 			lines = append(lines,
-				"    "+a.Expression,
-				"      "+ui.Muted.Render(fmt.Sprintf("expected: %v", a.Expected)),
-				"      "+ui.Muted.Render(fmt.Sprintf("actual:   %v", a.Actual)),
+				"  "+ui.FailureStyle.Render(a.Expression)+"  "+
+					ui.MutedStyle.Render(fmt.Sprintf("expected %v, actual %v", a.Expected, a.Actual)),
 			)
 		}
 	}

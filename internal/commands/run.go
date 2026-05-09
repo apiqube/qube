@@ -87,7 +87,7 @@ func runE(cmd *cobra.Command, args []string) error {
 	results, runErr := dispatchRun(ctx, cmd, eng, engine.FromPaths(paths...), runOpts)
 
 	if runErr != nil {
-		fmt.Fprintln(cmd.ErrOrStderr(), ui.Failure.Render("engine error: ")+runErr.Error())
+		ui.Errf("engine error: %v", runErr)
 		os.Exit(2) //nolint:gocritic // explicit exit code per CLI convention
 	}
 	if results != nil && (results.Failed > 0 || results.Errored > 0) {
@@ -134,14 +134,12 @@ func dispatchRun(
 	}
 }
 
-func warnUnsupportedFlags(w io.Writer) {
+func warnUnsupportedFlags(_ io.Writer) {
 	if len(runFlags.tags) > 0 || len(runFlags.excludeTags) > 0 {
-		msg := "tag filtering not yet supported in v1.0; flags accepted, no effect"
-		fmt.Fprintln(w, ui.Warn.Render("⚠ ")+ui.Muted.Render(msg))
+		ui.Warn("tag filtering not yet supported in v1.0; flags accepted, no effect")
 	}
 	if runFlags.timeout != "" {
-		msg := "global timeout flag not yet wired; ignored in v1.0"
-		fmt.Fprintln(w, ui.Warn.Render("⚠ ")+ui.Muted.Render(msg))
+		ui.Warn("global timeout flag not yet wired; ignored in v1.0")
 	}
 }
 

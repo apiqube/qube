@@ -3,10 +3,10 @@ package commands
 import (
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -57,8 +57,9 @@ func initE(cmd *cobra.Command, _ []string) error {
 }
 
 // writeProjectFiles writes .qube.yaml and tests/example.yaml relative to cwd.
-// Honors --force; refuses to overwrite otherwise.
-func writeProjectFiles(stdout interface{ Write(p []byte) (n int, err error) }, target string) error {
+// Honors --force; refuses to overwrite otherwise. Output is structured log
+// lines, no boxed cards.
+func writeProjectFiles(_ io.Writer, target string) error {
 	cwd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -78,17 +79,10 @@ func writeProjectFiles(stdout interface{ Write(p []byte) (n int, err error) }, t
 		return err
 	}
 
-	body := strings.Join([]string{
-		ui.Success.Render("Project initialized."),
-		"",
-		ui.Muted.Render("Files created:"),
-		"  " + cfgPath,
-		"  " + exPath,
-		"",
-		ui.Muted.Render("Next:"),
-		"  " + ui.Accent.Render("qube run tests/"),
-	}, "\n")
-	fmt.Fprintln(stdout, ui.SummaryCard.Render(body))
+	ui.Success("Project initialized.")
+	ui.Infof("Created %s", cfgPath)
+	ui.Infof("Created %s", exPath)
+	ui.Infof("Next: %s", ui.AccentStyle.Render("qube run tests/"))
 	return nil
 }
 

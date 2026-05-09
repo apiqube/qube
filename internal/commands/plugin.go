@@ -3,11 +3,11 @@ package commands
 import (
 	"context"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/charmbracelet/lipgloss"
 	"github.com/spf13/cobra"
 
 	"github.com/apiqube/engine"
@@ -58,9 +58,8 @@ var pluginRemoveCmd = &cobra.Command{
 func pluginListE(cmd *cobra.Command, _ []string) error {
 	dir := resolvePluginDir(pluginListFlags.dir)
 	if dir == "" {
-		fmt.Fprintln(cmd.OutOrStdout(), ui.SummaryCard.Render(
-			ui.Muted.Render("No plugin directory configured.\n")+
-				ui.Muted.Render("Pass --plugins, set $QUBE_PLUGIN_DIR, or create ~/.apiqube/plugins/")))
+		ui.Warn("no plugin directory configured")
+		ui.Info("pass --plugins, set $QUBE_PLUGIN_DIR, or create ~/.apiqube/plugins/")
 		return nil
 	}
 
@@ -69,9 +68,8 @@ func pluginListE(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	if len(entries) == 0 {
-		fmt.Fprintln(cmd.OutOrStdout(), ui.SummaryCard.Render(
-			ui.Muted.Render("No plugins installed in ")+ui.Accent.Render(dir)+".\n"+
-				ui.Muted.Render("Add a *.wasm file there or run ")+ui.Accent.Render("qube plugin install <name>")+ui.Muted.Render(" (coming soon).")))
+		ui.Infof("no plugins installed in %s", ui.AccentStyle.Render(dir))
+		ui.Info("add a *.wasm file there or run 'qube plugin install <name>' (coming soon)")
 		return nil
 	}
 
@@ -126,13 +124,13 @@ func loadPluginInfo(ctx context.Context, dir string) ([]engine.PluginSchema, err
 	eng := engine.New(engine.WithPluginDir(dir))
 	defer eng.Close()
 
-	// Trigger lazy plugin load by performing a benign Run that does nothing.
-	// We pipe an empty manifest so engine instantiates plugins and we can
-	// then snapshot them.
+	// Trigger lazy plugin load via an empty Run so we can snapshot Info.
 	_, _ = eng.Run(ctx, engine.FromBytes([]byte("tests: []")))
 	return eng.Plugins(), nil
 }
 
+// renderPluginTable returns a no-frills aligned table: bold header, separator
+// rule, plain rows. No borders, no zebra-stripes — just structured columns.
 func renderPluginTable(plugins []engine.PluginSchema) string {
 	headers := []string{"NAME", "VERSION", "PROTOCOLS", "CAPABILITIES"}
 	rows := make([][]string, 0, len(plugins))
@@ -144,18 +142,16 @@ func renderPluginTable(plugins []engine.PluginSchema) string {
 			strings.Join(p.Capabilities, ", "),
 		})
 	}
+	widths := columnWidths(headers, rows)
 
-	widths := computeColumnWidths(headers, rows)
 	var b strings.Builder
-	b.WriteString(renderTableRow(headers, widths, ui.TableHeader))
-	b.WriteString("\n")
-	for i, row := range rows {
-		style := ui.TableCell
-		if i%2 == 1 {
-			style = ui.TableCellFaint
-		}
-		b.WriteString(renderTableRow(row, widths, style))
-		b.WriteString("\n")
+	b.WriteString(formatRow(headers, widths, func(s string) string { return ui.TableHeaderStyle.Render(s) }))
+	b.WriteByte('\n')
+	b.WriteString(ui.MutedStyle.Render(strings.Repeat("─", totalWidth(widths))))
+	b.WriteByte('\n')
+	for _, row := range rows {
+		b.WriteString(formatRow(row, widths, func(s string) string { return s }))
+		b.WriteByte('\n')
 	}
 	return strings.TrimRight(b.String(), "\n")
 }
@@ -168,7 +164,7 @@ func joinProtocols(p []engine.Protocol) string {
 	return strings.Join(out, ", ")
 }
 
-func computeColumnWidths(headers []string, rows [][]string) []int {
+func columnWidths(headers []string, rows [][]string) []int {
 	w := make([]int, len(headers))
 	for i, h := range headers {
 		w[i] = len(h)
@@ -183,29 +179,30 @@ func computeColumnWidths(headers []string, rows [][]string) []int {
 	return w
 }
 
-func renderTableRow(cells []string, widths []int, style lipgloss.Style) string {
+func totalWidth(widths []int) int {
+	total := 0
+	for _, w := range widths {
+		total += w
+	}
+	return total + (len(widths)-1)*2 // join separator "  "
+}
+
+func formatRow(cells []string, widths []int, render func(string) string) string {
 	parts := make([]string, len(cells))
 	for i, c := range cells {
-		padding := widths[i] - len(c)
-		if padding < 0 {
-			padding = 0
+		pad := widths[i] - len(c)
+		if pad < 0 {
+			pad = 0
 		}
-		parts[i] = style.Render(c + strings.Repeat(" ", padding))
+		parts[i] = render(c + strings.Repeat(" ", pad))
 	}
 	return strings.Join(parts, "  ")
 }
 
-func printRoadmapStub(stdout interface{ Write(p []byte) (n int, err error) }, command, reason string) {
-	body := strings.Join([]string{
-		ui.Brand.Render(command),
-		"",
-		ui.Muted.Render("Roadmap status: not yet implemented."),
-		ui.Muted.Render(reason),
-		"",
-		ui.Muted.Render("v1.0 covers: ") + ui.Accent.Render("run, check, init, version, plugin list"),
-		ui.Muted.Render("Track progress at https://github.com/apiqube/qube"),
-	}, "\n")
-	fmt.Fprintln(stdout, ui.Card.Render(body))
+func printRoadmapStub(stdout io.Writer, command, reason string) {
+	fmt.Fprintln(stdout, ui.AccentStyle.Render(command)+ui.MutedStyle.Render(" — not yet implemented"))
+	fmt.Fprintln(stdout, ui.MutedStyle.Render("  "+reason))
+	fmt.Fprintln(stdout, ui.MutedStyle.Render("  v1.0 covers: ")+ui.AccentStyle.Render("run, check, init, version, plugin list"))
 }
 
 func init() {

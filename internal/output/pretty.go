@@ -3,7 +3,6 @@ package output
 import (
 	"fmt"
 	"io"
-	"strings"
 	"sync"
 	"time"
 
@@ -12,38 +11,45 @@ import (
 	"github.com/apiqube/qube/internal/ui"
 )
 
-// Pretty is an EventHandler that prints styled, progressive output as events
-// arrive. It's the default for non-interactive shells (CI, pipes) and the
-// fallback when the user explicitly disables the live TUI.
+// Pretty is an EventHandler that prints structured log lines as engine
+// events arrive. Used by qube run when stdout isn't a TTY (CI, pipes) and
+// by --no-tui. Each event maps to one log line; failures get extra
+// indented lines for assertion details.
 type Pretty struct {
 	w       io.Writer
 	mu      sync.Mutex
 	verbose bool
-
-	files int
-	tests int
-	waves int
-	start time.Time
+	logger  *ui.Logger
 }
 
-// NewPretty creates a Pretty output handler writing to w.
+// NewPretty creates a Pretty output handler writing to w. If verbose, it
+// emits TestStarted lines (else tests show up only on completion).
 func NewPretty(w io.Writer, verbose bool) *Pretty {
-	return &Pretty{w: w, verbose: verbose}
+	logger := ui.DefaultLogger.WithWriter(w)
+	logger.SetVerbose(verbose)
+	return &Pretty{w: w, verbose: verbose, logger: logger}
 }
 
-// Handle dispatches one event to the right renderer.
+// Handle dispatches one event to the right log writer.
 func (p *Pretty) Handle(event engine.Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 
 	switch e := event.(type) {
 	case engine.RunStarted:
-		p.onRunStarted(e)
+		p.logger.Logf(ui.LevelInfo, "qube run · %s · %s · %s",
+			plural(e.TotalTests, "test"),
+			plural(len(e.Files), "file"),
+			plural(e.TotalWaves, "wave"))
 	case engine.WaveStarted:
-		p.onWaveStarted(e)
+		mode := "sequential"
+		if e.Parallel {
+			mode = "parallel"
+		}
+		p.logger.Logf(ui.LevelDebug, "wave %d (%s)", e.Index+1, mode)
 	case engine.TestStarted:
 		if p.verbose {
-			p.onTestStarted(e)
+			p.logger.Logf(ui.LevelDebug, "▶ %s", e.Name)
 		}
 	case engine.TestCompleted:
 		p.onTestCompleted(e)
@@ -52,106 +58,86 @@ func (p *Pretty) Handle(event engine.Event) {
 	}
 }
 
-func (p *Pretty) onRunStarted(e engine.RunStarted) {
-	p.files = len(e.Files)
-	p.tests = e.TotalTests
-	p.waves = e.TotalWaves
-	p.start = time.Now()
-
-	header := ui.Brand.Render("qube run")
-	subtitle := ui.Muted.Render(fmt.Sprintf("%d tests · %d files · %d waves",
-		e.TotalTests, len(e.Files), e.TotalWaves))
-	fmt.Fprintln(p.w, ui.Header.Render(header+"  "+subtitle))
-}
-
-func (p *Pretty) onWaveStarted(e engine.WaveStarted) {
-	if !p.verbose {
-		return
-	}
-	label := fmt.Sprintf("Wave %d", e.Index+1)
-	if e.Parallel {
-		label += "  · parallel"
-	}
-	fmt.Fprintln(p.w, ui.Accent.Render(label))
-}
-
-func (p *Pretty) onTestStarted(e engine.TestStarted) {
-	icon := ui.StatusRunning.Icon()
-	line := fmt.Sprintf("%s  %s  %s",
-		ui.Accent.Render(icon),
-		e.Name,
-		ui.Muted.Render(string(e.Protocol)+" "+e.Target),
-	)
-	fmt.Fprintln(p.w, line)
-}
-
 func (p *Pretty) onTestCompleted(e engine.TestCompleted) {
-	status := mapStatus(e.Status)
-	icon := ui.StatusStyle(status).Render(status.Icon())
-	durStr := ui.Muted.Render(formatDuration(e.Duration))
-	line := fmt.Sprintf("%s  %s  %s", icon, e.Name, durStr)
-	fmt.Fprintln(p.w, line)
-
-	if e.Status == engine.StatusFailed || e.Status == engine.StatusErrored {
-		p.printFailureDetails(e)
-	}
-}
-
-func (p *Pretty) printFailureDetails(e engine.TestCompleted) {
-	if e.Error != "" {
-		fmt.Fprintf(p.w, "    %s %s\n",
-			ui.Failure.Render("error:"),
-			e.Error,
-		)
-	}
-	for _, a := range e.Assertions {
-		if a.Passed {
-			continue
-		}
-		exp := ui.Muted.Render(fmt.Sprintf("expected: %v", a.Expected))
-		act := ui.Muted.Render(fmt.Sprintf("actual:   %v", a.Actual))
-		fmt.Fprintf(p.w, "    %s  %s\n", ui.Failure.Render("✗"), a.Expression)
-		fmt.Fprintf(p.w, "      %s\n", exp)
-		fmt.Fprintf(p.w, "      %s\n", act)
-		if a.Message != "" {
-			fmt.Fprintf(p.w, "      %s\n", ui.Muted.Render(a.Message))
-		}
+	dur := formatDuration(e.Duration)
+	switch e.Status {
+	case engine.StatusPassed:
+		p.logger.Logf(ui.LevelSuccess, "✓ %s (%s)", e.Name, dur)
+	case engine.StatusSkipped:
+		p.logger.Logf(ui.LevelInfo, "⏭ %s (skipped)", e.Name)
+	case engine.StatusErrored:
+		p.logger.Logf(ui.LevelError, "✗ %s (%s)\n%s", e.Name, dur, errorDetails(e))
+	case engine.StatusFailed:
+		p.logger.Logf(ui.LevelError, "✗ %s (%s)\n%s", e.Name, dur, assertionDetails(e))
 	}
 }
 
 func (p *Pretty) onRunCompleted(e engine.RunCompleted) {
-	body := strings.Builder{}
-	body.WriteString(ui.Success.Render(fmt.Sprintf("%d passed", e.Passed)))
-	if e.Failed > 0 {
-		body.WriteString("   ")
-		body.WriteString(ui.Failure.Render(fmt.Sprintf("%d failed", e.Failed)))
-	}
-	if e.Errored > 0 {
-		body.WriteString("   ")
-		body.WriteString(ui.Failure.Render(fmt.Sprintf("%d errored", e.Errored)))
-	}
-	if e.Skipped > 0 {
-		body.WriteString("   ")
-		body.WriteString(ui.Muted.Render(fmt.Sprintf("%d skipped", e.Skipped)))
-	}
-	body.WriteString("\n")
-	body.WriteString(ui.Muted.Render(formatDuration(e.Duration) + " total"))
-	fmt.Fprintln(p.w)
-	fmt.Fprintln(p.w, ui.SummaryCard.Render(body.String()))
+	p.logger.Logf(ui.LevelInfo, "Run finished · %s · %s",
+		summaryLine(e),
+		formatDuration(e.Duration))
 }
 
-func mapStatus(s engine.TestStatus) ui.Status {
-	switch s {
-	case engine.StatusPassed:
-		return ui.StatusPassed
-	case engine.StatusFailed:
-		return ui.StatusFailed
-	case engine.StatusSkipped:
-		return ui.StatusSkipped
-	case engine.StatusErrored:
-		return ui.StatusErrored
+// summaryLine returns "3 passed, 1 failed, 0 skipped" with sensible coloring.
+func summaryLine(e engine.RunCompleted) string {
+	parts := []string{ui.SuccessStyle.Render(fmt.Sprintf("%d passed", e.Passed))}
+	if e.Failed > 0 {
+		parts = append(parts, ui.FailureStyle.Render(fmt.Sprintf("%d failed", e.Failed)))
 	}
-	return ui.StatusPending
+	if e.Errored > 0 {
+		parts = append(parts, ui.FailureStyle.Render(fmt.Sprintf("%d errored", e.Errored)))
+	}
+	if e.Skipped > 0 {
+		parts = append(parts, ui.MutedStyle.Render(fmt.Sprintf("%d skipped", e.Skipped)))
+	}
+	return joinWithSep(parts, ", ")
+}
+
+func joinWithSep(parts []string, sep string) string {
+	out := ""
+	for i, p := range parts {
+		if i > 0 {
+			out += sep
+		}
+		out += p
+	}
+	return out
+}
+
+func errorDetails(e engine.TestCompleted) string {
+	if e.Error == "" {
+		return ui.MutedStyle.Render("  (no error message)")
+	}
+	return "  " + ui.MutedStyle.Render(e.Error)
+}
+
+func assertionDetails(e engine.TestCompleted) string {
+	out := ""
+	for i, a := range e.Assertions {
+		if a.Passed {
+			continue
+		}
+		if i > 0 {
+			out += "\n"
+		}
+		out += "  "
+		out += ui.FailureStyle.Render(a.Expression) + "  "
+		out += ui.MutedStyle.Render(fmt.Sprintf("expected %v, actual %v", a.Expected, a.Actual))
+	}
+	if out == "" && e.Error != "" {
+		return "  " + ui.MutedStyle.Render(e.Error)
+	}
+	if out == "" {
+		return ui.MutedStyle.Render("  (no failure details)")
+	}
+	return out
+}
+
+func plural(n int, word string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, word)
+	}
+	return fmt.Sprintf("%d %ss", n, word)
 }
 
 func formatDuration(d time.Duration) string {

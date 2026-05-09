@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/apiqube/qube/internal/ui"
 )
 
 func TestRoot_HasAllSubcommands(t *testing.T) {
@@ -78,6 +80,12 @@ func TestPluginRemove_StubMessage(t *testing.T) {
 func TestInit_SilentMode(t *testing.T) {
 	t.Setenv("NO_COLOR", "1")
 
+	// init writes its success message via ui.DefaultLogger (stderr by default).
+	// Redirect the logger so the test can assert on it.
+	var logBuf bytes.Buffer
+	ui.DefaultLogger.SetWriter(&logBuf)
+	defer ui.DefaultLogger.SetWriter(os.Stderr)
+
 	dir := t.TempDir()
 	prevWD, _ := os.Getwd()
 	if err := os.Chdir(dir); err != nil {
@@ -93,10 +101,7 @@ func TestInit_SilentMode(t *testing.T) {
 		initFlags.force = false
 	}()
 
-	var out bytes.Buffer
 	cmd := initCmd
-	cmd.SetOut(&out)
-
 	if err := cmd.RunE(cmd, nil); err != nil {
 		t.Fatalf("init silent: %v", err)
 	}
@@ -107,8 +112,8 @@ func TestInit_SilentMode(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "tests", "example.yaml")); err != nil {
 		t.Errorf("tests/example.yaml not written: %v", err)
 	}
-	if !strings.Contains(out.String(), "Project initialized") {
-		t.Errorf("success message missing: %q", out.String())
+	if !strings.Contains(logBuf.String(), "Project initialized") {
+		t.Errorf("success message missing in log: %q", logBuf.String())
 	}
 }
 
