@@ -1,28 +1,47 @@
 package output
 
 import (
+	"encoding/json"
+	"fmt"
 	"io"
+	"os"
+	"sync"
 
 	"github.com/apiqube/engine"
 )
 
 // JSON is an EventHandler that writes each event as a single JSON line.
-// Useful for piping to jq, log aggregators, or external processors.
+// Output is NDJSON: one object per line, each carrying a "type" tag and
+// the original event payload.
 type JSON struct {
-	w io.Writer
+	w  io.Writer
+	mu sync.Mutex
 }
 
-// NewJSON creates a new JSON output handler writing to w.
+// NewJSON creates a JSON output handler writing to w.
 func NewJSON(w io.Writer) *JSON {
 	return &JSON{w: w}
 }
 
-// Handle marshals the event to JSON and writes it as one line (NDJSON).
+// Handle marshals the event and writes it as a single line. Errors are
+// reported to stderr; the handler never panics.
 func (j *JSON) Handle(event engine.Event) {
-	// TODO: implementation
-	//
-	// 1. Build wrapper with "type": event.Type() and "payload": event
-	// 2. Marshal to JSON
-	// 3. Write line with trailing newline
-	// 4. On error, write to stderr (never panic on output)
+	j.mu.Lock()
+	defer j.mu.Unlock()
+
+	wrapper := struct {
+		Type    string      `json:"type"`
+		Payload engine.Event `json:"payload"`
+	}{
+		Type:    event.Type(),
+		Payload: event,
+	}
+	data, err := json.Marshal(wrapper)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "qube/output: json marshal: %v\n", err)
+		return
+	}
+	if _, err := j.w.Write(append(data, '\n')); err != nil {
+		fmt.Fprintf(os.Stderr, "qube/output: json write: %v\n", err)
+	}
 }

@@ -1,9 +1,17 @@
 package commands
 
 import (
+	"errors"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/apiqube/qube/internal/tui"
+	"github.com/apiqube/qube/internal/ui"
 )
 
 var initFlags struct {
@@ -20,33 +28,108 @@ var initCmd = &cobra.Command{
   .qube.yaml         project configuration
   tests/example.yaml simple example test
 
-Use --interactive to answer questions and optionally generate tests
-from an existing OpenAPI/Swagger specification.`,
-	RunE: func(cmd *cobra.Command, args []string) error {
-		// TODO: implementation
-		//
-		// Silent mode (default):
-		//   1. Create .qube.yaml with default targets and empty plugins list
-		//   2. Create tests/example.yaml with a minimal smoke test
-		//   3. Print "next steps" message
-		//
-		// Interactive mode (--interactive):
-		//   1. Launch tui.RunInitWizard()
-		//      - Ask target URL
-		//      - Ask if there's an OpenAPI spec
-		//      - If yes, ask for spec URL/path
-		//      - Ask which plugins to enable
-		//   2. If swagger provided: invoke generate plugin to create tests
-		//   3. Otherwise: create example test
-		//
-		// --force overwrites existing files.
-		return fmt.Errorf("not implemented")
-	},
+Use --interactive to answer questions and (later) generate tests from
+an existing OpenAPI/Swagger specification.`,
+	RunE: initE,
+}
+
+func initE(cmd *cobra.Command, _ []string) error {
+	target := initFlags.targetURL
+	if target == "" {
+		target = "http://localhost:8080"
+	}
+
+	if initFlags.interactive {
+		answers, err := tui.RunInitWizard()
+		if err != nil {
+			return fmt.Errorf("init wizard: %w", err)
+		}
+		if answers != nil {
+			target = answers.TargetURL
+			initFlags.swaggerURL = answers.SwaggerURL
+		}
+	}
+
+	if err := writeProjectFiles(cmd.OutOrStdout(), target); err != nil {
+		return err
+	}
+	return nil
+}
+
+// writeProjectFiles writes .qube.yaml and tests/example.yaml relative to cwd.
+// Honors --force; refuses to overwrite otherwise.
+func writeProjectFiles(stdout interface{ Write(p []byte) (n int, err error) }, target string) error {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+
+	cfgPath := filepath.Join(cwd, ".qube.yaml")
+	if err := writeIfAbsent(cfgPath, configYAML(target), initFlags.force); err != nil {
+		return err
+	}
+
+	exDir := filepath.Join(cwd, "tests")
+	if err := os.MkdirAll(exDir, 0o755); err != nil {
+		return fmt.Errorf("create tests dir: %w", err)
+	}
+	exPath := filepath.Join(exDir, "example.yaml")
+	if err := writeIfAbsent(exPath, exampleYAML(target), initFlags.force); err != nil {
+		return err
+	}
+
+	body := strings.Join([]string{
+		ui.Success.Render("Project initialized."),
+		"",
+		ui.Muted.Render("Files created:"),
+		"  " + cfgPath,
+		"  " + exPath,
+		"",
+		ui.Muted.Render("Next:"),
+		"  " + ui.Accent.Render("qube run tests/"),
+	}, "\n")
+	fmt.Fprintln(stdout, ui.SummaryCard.Render(body))
+	return nil
+}
+
+func writeIfAbsent(path, contents string, force bool) error {
+	if !force {
+		if _, err := os.Stat(path); err == nil {
+			return fmt.Errorf("%s exists; pass --force to overwrite", path)
+		} else if !errors.Is(err, fs.ErrNotExist) {
+			return err
+		}
+	}
+	return os.WriteFile(path, []byte(contents), 0o644)
+}
+
+func configYAML(target string) string {
+	return fmt.Sprintf(`# qube project configuration. See https://github.com/apiqube/qube
+version: 1
+targets:
+  default: %s
+runner:
+  parallel: true
+  failFast: false
+`, target)
+}
+
+func exampleYAML(target string) string {
+	return fmt.Sprintf(`# Example test. Run with: qube run tests/example.yaml
+target: %s
+
+tests:
+  - name: Health check
+    method: GET
+    resource: /health
+    expect:
+      status: 200
+`, target)
 }
 
 func init() {
 	initCmd.Flags().BoolVarP(&initFlags.interactive, "interactive", "i", false, "ask questions interactively")
-	initCmd.Flags().StringVar(&initFlags.swaggerURL, "from-swagger", "", "generate tests from OpenAPI/Swagger spec")
+	initCmd.Flags().StringVar(&initFlags.swaggerURL, "from-swagger", "", "generate tests from OpenAPI/Swagger spec (v1.0: not yet wired)")
 	initCmd.Flags().StringVar(&initFlags.targetURL, "target", "", "default target URL")
 	initCmd.Flags().BoolVar(&initFlags.force, "force", false, "overwrite existing files")
 }

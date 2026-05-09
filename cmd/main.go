@@ -1,15 +1,17 @@
+// Package main is the entry point for the qube CLI binary.
 package main
 
 import (
-	"fmt"
-	"os"
+	"context"
+
+	"github.com/charmbracelet/fang"
 
 	"github.com/apiqube/qube/internal/commands"
 )
 
 func main() {
-	if err := commands.Execute(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
+	// fang wraps cobra and styles help screens, errors, and the version block.
+	// It writes its own styled output on error, so we don't need a custom
+	// fmt.Fprintln fallback here.
+	_ = fang.Execute(context.Background(), commands.Root())
 }
